@@ -175,7 +175,8 @@ std::size_t X64InstructionDecoder::Decode(const std::uint8_t* data, std::size_t 
                 immediateSize = (rexPresent && (rex & RexWBit) != 0) ? ImmSize64 :
                     (operandSizeOverride ? ImmSize16 : ImmSize32);
             } else {
-                immediateSize = operandSizeOverride ? ImmSize16 : ImmSize32;
+                immediateSize = operandSizeOverride && !(rexPresent && (rex & RexWBit) != 0)
+                    ? ImmSize16 : ImmSize32;
             }
         } else if (opcode == OneByteImm8Grp1 || opcode == OneByteImulRm32Imm8) {
             immediateSize = ImmSize8;
@@ -279,7 +280,7 @@ std::size_t X64InstructionDecoder::Decode(const std::uint8_t* data, std::size_t 
         reg <= Grp3RegTestMax) {
         immediateSize = (opcode == OneByteTestGrp3Rm8)
             ? ImmSize8
-            : (operandSizeOverride ? ImmSize16 : ImmSize32);
+            : (operandSizeOverride && !(rexPresent && (rex & RexWBit) != 0) ? ImmSize16 : ImmSize32);
     }
 
     if (mod != ModRmModRegister && rm == ModRmRmSibPresent) {
