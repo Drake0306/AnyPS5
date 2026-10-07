@@ -11,6 +11,7 @@ OPCODES = ROOT / "core" / "shader" / "recompiler" / "RdnaDecoder" / "include" / 
 ISA = Path(__file__).resolve().parent / "rdna_isa.txt"
 SOURCE = f'https://github.com/{os.environ.get("GITHUB_REPOSITORY", "boykopovar/AnyPS5")}/blob/main'
 DEFINITION = re.compile(r"\bAPS5_VABI\s+(\w+)\s*\([^;{]*\)\s*(?:noexcept\s*)?(?:try\s*)?\{")
+SHARED_SOURCES = re.compile(r"include\(\$\{CMAKE_CURRENT_SOURCE_DIR\}/\.\./([^/)]+)/\w+\.cmake\)")
 STUB = "NotImplemented_nid_no_patch"
 STUB_WRAPPER = re.compile(r"\bstatic\s+(?:\[\[noreturn\]\]\s+)?void\s+(\w+)\s*\([^;{]*\)\s*\{")
 FLAT_SEGMENTS = ("GLOBAL_", "SCRATCH_")
@@ -95,8 +96,14 @@ def scan_library(path):
             body = text[match.end() - 1:body_end(text, match.end() - 1)]
             (todo if any(call in body for call in calls) else done).add(name)
     todo -= done
-    return {"name": path.name, "label": path.name.removeprefix("libSce"), "done": len(done), "todo": len(todo),
-            "done_names": sorted(done), "todo_names": sorted(todo)}
+    group = {"name": path.name, "label": path.name.removeprefix("libSce"), "done": len(done), "todo": len(todo),
+             "done_names": sorted(done), "todo_names": sorted(todo)}
+    cmake = path / "CMakeLists.txt"
+    if not done and not todo and cmake.is_file():
+        match = SHARED_SOURCES.search(cmake.read_text())
+        if match:
+            group["shares"] = match.group(1)
+    return group
 
 
 def summarize(groups):
@@ -242,6 +249,10 @@ def table(heading, column, data):
     rows = [f"<h2>{heading}</h2>", "<table>",
             f"<tr><th>{column}</th><th>Implemented</th><th>Total</th><th>%</th></tr>"]
     for group in sorted(data["groups"], key=lambda g: g["name"].lower()):
+        if group.get("shares"):
+            rows.append(f'<tr><td>{escape(group["name"])}</td>'
+                        f'<td colspan="3">shares the sources of {escape(group["shares"])}</td></tr>')
+            continue
         total = group["done"] + group["todo"]
         percent = f'{100 * group["done"] / total:.0f}%' if total else "-"
         rows.append(f'<tr><td>{escape(group["name"])}</td><td>{group["done"]}</td><td>{total}</td><td>{percent}</td></tr>')
@@ -292,18 +303,23 @@ def details(icon, title, column, items):
 def compare(title, column, unit, base, head):
     base_done, head_done = names(base, "done"), names(head, "done")
     base_all, head_all = base_done | names(base, "todo"), head_done | names(head, "todo")
+    shares = {g["name"]: g["shares"] for g in head["groups"] if g.get("shares")}
     implemented, declared = head_done - base_done, head_all - base_all - head_done
     regressed, removed = base_done & (head_all - head_done), base_all - head_all
-    if not (implemented or declared or regressed or removed):
+    shared = {(group, name) for group, name in removed if (shares.get(group), name) in head_all}
+    removed -= shared
+    if not (implemented or declared or regressed or shared or removed):
         return []
     delta = round(head["percent"] - base["percent"], 2)
     icon = "📈" if delta > 0 else "📉" if delta < 0 else "➖"
     counts = [f"{n:+} {label}" for n, label in ((len(implemented), "implemented"), (len(declared), "declared"),
-                                                (-len(regressed), "reverted"), (-len(removed), "removed")) if n]
+                                                (-len(regressed), "reverted"), (-len(shared), "moved to shared sources"),
+                                                (-len(removed), "removed")) if n]
     lines = [f'{icon} **{title}**: {head["percent"]}% ({delta:+}%, {", ".join(counts)} {unit})', ""]
     lines += details("✅", "implemented", column, implemented)
     lines += details("🆕", "declared as stubs", column, declared)
     lines += details("⚠️", "went back to stubs", column, regressed)
+    lines += details("🔗", "moved to shared sources", column, shared)
     lines += details("🗑️", "removed", column, removed)
     return lines + [""]
 
